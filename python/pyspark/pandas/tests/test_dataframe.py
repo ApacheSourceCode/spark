@@ -1263,9 +1263,11 @@ class DataFrameTest(PandasOnSparkTestCase, SQLTestUtils):
         self.assert_eq(psdf.drop("x"), pdf.drop("x", axis=1))
         # Assert using a list for 'labels' works
         self.assert_eq(psdf.drop(["y", "z"], axis=1), pdf.drop(["y", "z"], axis=1))
+        self.assert_eq(psdf.drop(["x", "y", "z"], axis=1), pdf.drop(["x", "y", "z"], axis=1))
         # Assert using 'columns' instead of 'labels' produces the same results
         self.assert_eq(psdf.drop(columns="x"), pdf.drop(columns="x"))
         self.assert_eq(psdf.drop(columns=["y", "z"]), pdf.drop(columns=["y", "z"]))
+        self.assert_eq(psdf.drop(columns=["x", "y", "z"]), pdf.drop(columns=["x", "y", "z"]))
 
         # Assert 'labels' being used when both 'labels' and 'columns' are specified
         # TODO: should throw an error?
@@ -1279,9 +1281,20 @@ class DataFrameTest(PandasOnSparkTestCase, SQLTestUtils):
         self.assert_eq(psdf.drop(columns=1), pdf.drop(columns=1))
         self.assert_eq(psdf.drop(columns=(1, "x")), pdf.drop(columns=(1, "x")))
         self.assert_eq(psdf.drop(columns=[(1, "x"), 2]), pdf.drop(columns=[(1, "x"), 2]))
+        self.assert_eq(
+            psdf.drop(columns=[(1, "x"), (1, "y"), (2, "z")]),
+            pdf.drop(columns=[(1, "x"), (1, "y"), (2, "z")]),
+        )
 
         self.assertRaises(KeyError, lambda: psdf.drop(columns=3))
         self.assertRaises(KeyError, lambda: psdf.drop(columns=(1, "z")))
+
+        pdf.index = pd.MultiIndex.from_tuples([("i", 0), ("j", 1)])
+        psdf = ps.from_pandas(pdf)
+        self.assert_eq(
+            psdf.drop(columns=[(1, "x"), (1, "y"), (2, "z")]),
+            pdf.drop(columns=[(1, "x"), (1, "y"), (2, "z")]),
+        )
 
         # non-string names
         pdf = pd.DataFrame({10: [1, 2], 20: [3, 4], 30: [5, 6]}, index=np.random.rand(2))
@@ -5725,6 +5738,22 @@ class DataFrameTest(PandasOnSparkTestCase, SQLTestUtils):
 
         for value_psdf, value_pdf in zip(psdf, pdf):
             self.assert_eq(value_psdf, value_pdf)
+
+    def test_combine_first(self):
+        pdf = pd.DataFrame(
+            {("X", "A"): [None, 0], ("X", "B"): [4, None], ("Y", "C"): [3, 3], ("Y", "B"): [1, 1]}
+        )
+        pdf1, pdf2 = pdf["X"], pdf["Y"]
+        psdf = ps.from_pandas(pdf)
+        psdf1, psdf2 = psdf["X"], psdf["Y"]
+
+        if LooseVersion(pd.__version__) >= LooseVersion("1.2.0"):
+            self.assert_eq(pdf1.combine_first(pdf2), psdf1.combine_first(psdf2))
+        else:
+            # pandas < 1.2.0 returns unexpected dtypes,
+            # please refer to https://github.com/pandas-dev/pandas/issues/28481 for details
+            expected_pdf = pd.DataFrame({"A": [None, 0], "B": [4.0, 1.0], "C": [3, 3]})
+            self.assert_eq(expected_pdf, psdf1.combine_first(psdf2))
 
 
 if __name__ == "__main__":

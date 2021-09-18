@@ -53,7 +53,6 @@ import datetime
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_list_like, is_dict_like, is_scalar
-from pandas.api.extensions import ExtensionDtype
 from pandas.tseries.frequencies import DateOffset, to_offset
 
 if TYPE_CHECKING:
@@ -126,6 +125,7 @@ from pyspark.pandas.typedef.typehints import (
     DataFrameType,
     SeriesType,
     ScalarType,
+    create_tuple_for_frame_type,
 )
 from pyspark.pandas.plot import PandasOnSparkPlotAccessor
 
@@ -343,57 +343,6 @@ rectangle    16.0  2.348543e+108
 """
 
 
-def _create_tuple_for_frame_type(params: Any) -> object:
-    """
-    This is a workaround to support variadic generic in DataFrame.
-
-    See https://github.com/python/typing/issues/193
-    we always wraps the given type hints by a tuple to mimic the variadic generic.
-    """
-    from pyspark.pandas.typedef import NameTypeHolder
-
-    if isinstance(params, zip):  # type: ignore
-        params = [slice(name, tpe) for name, tpe in params]  # type: ignore
-
-    if isinstance(params, slice):
-        params = (params,)
-
-    if (
-        hasattr(params, "__len__")
-        and isinstance(params, Iterable)
-        and all(isinstance(param, slice) for param in params)
-    ):
-        for param in params:
-            if isinstance(param.start, str) and param.step is not None:
-                raise TypeError(
-                    "Type hints should be specified as "
-                    "DataFrame['name': type]; however, got %s" % param
-                )
-
-        name_classes = []
-        for param in params:
-            new_class = type("NameType", (NameTypeHolder,), {})  # type: Type[NameTypeHolder]
-            new_class.name = param.start
-            # When the given argument is a numpy's dtype instance.
-            new_class.tpe = param.stop.type if isinstance(param.stop, np.dtype) else param.stop
-            name_classes.append(new_class)
-
-        return Tuple[tuple(name_classes)]
-
-    if not isinstance(params, Iterable):
-        params = [params]
-
-    new_params = []
-    for param in params:
-        if isinstance(param, ExtensionDtype):
-            new_class = type("NameType", (NameTypeHolder,), {})
-            new_class.tpe = param
-            new_params.append(new_class)
-        else:
-            new_params.append(param.type if isinstance(param, np.dtype) else param)
-    return Tuple[tuple(new_params)]
-
-
 if (3, 5) <= sys.version_info < (3, 7) and __name__ != "__main__":
     from typing import GenericMeta  # type: ignore
 
@@ -405,7 +354,7 @@ if (3, 5) <= sys.version_info < (3, 7) and __name__ != "__main__":
     @no_type_check
     def new_getitem(self, params):
         if hasattr(self, "is_dataframe"):
-            return old_getitem(self, _create_tuple_for_frame_type(params))
+            return old_getitem(self, create_tuple_for_frame_type(params))
         else:
             return old_getitem(self, params)
 
@@ -6726,14 +6675,17 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
             )
             if len(drop_column_labels) == 0:
                 raise KeyError(columns)
-            cols, labels = zip(
-                *(
-                    (column, label)
-                    for column, label in zip(
-                        self._internal.data_spark_column_names, self._internal.column_labels
-                    )
-                    if label not in drop_column_labels
+
+            keep_columns_and_labels = [
+                (column, label)
+                for column, label in zip(
+                    self._internal.data_spark_column_names, self._internal.column_labels
                 )
+                if label not in drop_column_labels
+            ]
+
+            cols, labels = (
+                zip(*keep_columns_and_labels) if len(keep_columns_and_labels) > 0 else ([], [])
             )
             internal = self._internal.with_new_columns([self._psser_for(label) for label in labels])
             return DataFrame(internal)
@@ -7896,6 +7848,91 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
             right, left_index=True, right_index=True, how=how, suffixes=(lsuffix, rsuffix)
         )
         return join_psdf.reset_index() if need_set_index else join_psdf
+
+    def combine_first(self, other: "DataFrame") -> "DataFrame":
+        """
+        Update null elements with value in the same location in `other`.
+
+        Combine two DataFrame objects by filling null values in one DataFrame
+        with non-null values from other DataFrame. The row and column indexes
+        of the resulting DataFrame will be the union of the two.
+
+        .. versionadded:: 3.3.0
+
+        Parameters
+        ----------
+        other : DataFrame
+            Provided DataFrame to use to fill null values.
+
+        Returns
+        -------
+        DataFrame
+
+        Examples
+        --------
+        >>> ps.set_option("compute.ops_on_diff_frames", True)
+        >>> df1 = ps.DataFrame({'A': [None, 0], 'B': [None, 4]})
+        >>> df2 = ps.DataFrame({'A': [1, 1], 'B': [3, 3]})
+
+        >>> df1.combine_first(df2).sort_index()
+             A    B
+        0  1.0  3.0
+        1  0.0  4.0
+
+        Null values still persist if the location of that null value does not exist in other
+
+        >>> df1 = ps.DataFrame({'A': [None, 0], 'B': [4, None]})
+        >>> df2 = ps.DataFrame({'B': [3, 3], 'C': [1, 1]}, index=[1, 2])
+
+        >>> df1.combine_first(df2).sort_index()
+             A    B    C
+        0  NaN  4.0  NaN
+        1  0.0  3.0  1.0
+        2  NaN  3.0  1.0
+        >>> ps.reset_option("compute.ops_on_diff_frames")
+        """
+        if not isinstance(other, DataFrame):
+            raise TypeError("`combine_first` only allows `DataFrame` for parameter `other`")
+        if same_anchor(self, other):
+            combined = self
+            this = self
+            that = other
+        else:
+            combined = combine_frames(self, other)
+            this = combined["this"]
+            that = combined["that"]
+
+        intersect_column_labels = set(self._internal.column_labels).intersection(
+            set(other._internal.column_labels)
+        )
+
+        column_labels, data_spark_columns = [], []
+        for column_label in this._internal.column_labels:
+            this_scol = this._internal.spark_column_for(column_label)
+            if column_label in intersect_column_labels:
+                that_scol = that._internal.spark_column_for(column_label)
+                this_scol_name = this._internal.spark_column_name_for(column_label)
+                combined_scol = (
+                    F.when(this_scol.isNull(), that_scol).otherwise(this_scol).alias(this_scol_name)
+                )
+                data_spark_columns.append(combined_scol)
+            else:
+                data_spark_columns.append(this_scol)
+            column_labels.append(column_label)
+
+        for column_label in that._internal.column_labels:
+            if column_label not in intersect_column_labels:
+                that_scol = that._internal.spark_column_for(column_label)
+                data_spark_columns.append(that_scol)
+                column_labels.append(column_label)
+
+        internal = combined._internal.copy(
+            column_labels=column_labels,
+            data_spark_columns=data_spark_columns,
+            data_fields=None,  # TODO: dtype?
+            column_label_names=self._internal.column_label_names,
+        )
+        return DataFrame(internal)
 
     def append(
         self,
@@ -11958,7 +11995,7 @@ defaultdict(<class 'list'>, {'col..., 'col...})]
             # This is a workaround to support variadic generic in DataFrame in Python 3.7.
             # See https://github.com/python/typing/issues/193
             # we always wraps the given type hints by a tuple to mimic the variadic generic.
-            return _create_tuple_for_frame_type(params)
+            return create_tuple_for_frame_type(params)
 
     elif (3, 5) <= sys.version_info < (3, 7):
         # This is a workaround to support variadic generic in DataFrame in Python 3.5+
