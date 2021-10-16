@@ -159,7 +159,8 @@ abstract class Optimizer(catalogManager: CatalogManager)
       PullOutGroupingExpressions,
       ComputeCurrentTime,
       ReplaceCurrentLike(catalogManager),
-      SpecialDatetimeValues) ::
+      SpecialDatetimeValues,
+      RewriteAsOfJoin) ::
     //////////////////////////////////////////////////////////////////////////////////////////
     // Optimizer rules start here
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -282,7 +283,9 @@ abstract class Optimizer(catalogManager: CatalogManager)
       RewritePredicateSubquery.ruleName ::
       NormalizeFloatingNumbers.ruleName ::
       ReplaceUpdateFieldsExpression.ruleName ::
-      PullOutGroupingExpressions.ruleName :: Nil
+      PullOutGroupingExpressions.ruleName ::
+      RewriteAsOfJoin.ruleName ::
+      RewriteLateralSubquery.ruleName :: Nil
 
   /**
    * Optimize all the subqueries inside expression.

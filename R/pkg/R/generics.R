@@ -725,6 +725,9 @@ setGeneric("like", function(x, ...) { standardGeneric("like") })
 #' @rdname columnfunctions
 setGeneric("rlike", function(x, ...) { standardGeneric("rlike") })
 
+#' @rdname columnfunctions
+setGeneric("ilike", function(x, ...) { standardGeneric("ilike") })
+
 #' @rdname startsWith
 setGeneric("startsWith", function(x, prefix) { standardGeneric("startsWith") })
 
@@ -1187,9 +1190,17 @@ setGeneric("map_values", function(x) { standardGeneric("map_values") })
 #' @name NULL
 setGeneric("map_zip_with", function(x, y, f) { standardGeneric("map_zip_with") })
 
+#' @rdname column_aggregate_functions
+#' @name NULL
+setGeneric("max_by", function(x, y) { standardGeneric("max_by") })
+
 #' @rdname column_misc_functions
 #' @name NULL
 setGeneric("md5", function(x) { standardGeneric("md5") })
+
+#' @rdname column_aggregate_functions
+#' @name NULL
+setGeneric("min_by", function(x, y) { standardGeneric("min_by") })
 
 #' @rdname column_datetime_functions
 #' @name NULL
