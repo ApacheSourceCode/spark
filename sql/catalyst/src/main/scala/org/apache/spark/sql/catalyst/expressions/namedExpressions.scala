@@ -294,7 +294,7 @@ case class AttributeReference(
   }
 
   override lazy val preCanonicalized: Expression = {
-    AttributeReference("none", dataType.asNullable)(exprId)
+    AttributeReference("none", dataType)(exprId)
   }
 
   override def newInstance(): AttributeReference =
@@ -342,7 +342,7 @@ case class AttributeReference(
     AttributeReference(name, dataType, nullable, newMetadata)(exprId, qualifier)
   }
 
-  override def withDataType(newType: DataType): Attribute = {
+  override def withDataType(newType: DataType): AttributeReference = {
     AttributeReference(name, newType, nullable, metadata)(exprId, qualifier)
   }
 
